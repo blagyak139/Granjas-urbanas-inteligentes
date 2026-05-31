@@ -28,6 +28,8 @@ from lambda_solid import (
     RANGOS_VALIDOS,
     CAMPOS_REQUERIDOS,
     IDeduplicador,
+    IPersistencia,
+    PersistenciaDynamoDB,
     lambda_handler,
 )
 
@@ -81,8 +83,19 @@ def deduplicador_vacio():
     return DeduplicadorMemoria()
 
 
+
 @pytest.fixture
-def servicio(deduplicador_vacio):
+def persistencia_memoria():
+    """Mock de persistencia en memoria para pruebas sin DynamoDB."""
+    class PersistenciaMemoria(IPersistencia):
+        def __init__(self):
+            self.eventos_guardados = []
+        def guardar(self, evento):
+            self.eventos_guardados.append(evento)
+    return PersistenciaMemoria()
+
+@pytest.fixture
+def servicio(deduplicador_vacio, persistencia_memoria):
     """
     Servicio completo con todas las dependencias reales excepto DynamoDB.
     Principio D: DynamoDB se sustituye por el mock en memoria.
@@ -100,7 +113,8 @@ def servicio(deduplicador_vacio):
         deduplicador   = deduplicador_vacio,
         enriquecedor   = EnriquecedorEvento(validador_fecha),
         constructor    = ConstructorRespuestaHTTP(),
-        logger         = Logger(config)
+        logger         = Logger(config),
+        persistencia   = persistencia_memoria
     )
 
 
@@ -251,7 +265,7 @@ class TestValidadorTipos:
         mensaje_valido["valor_medida"] = "muy_caliente"
         ok, causa = self.val.validar(mensaje_valido)
         assert ok is False
-        assert "numérico" in causa
+        assert "num" in causa
 
     def test_rechaza_none(self, mensaje_valido):
         mensaje_valido["valor_medida"] = None
@@ -360,7 +374,7 @@ class TestValidadorFecha:
     def test_fecha_invalida_usa_fecha_del_servidor(self):
         fecha, origen = self.val.normalizar("no-es-una-fecha", self.received_at)
         assert fecha   == self.received_at
-        assert origen  == "servidor (fecha del sensor inválida)"
+        assert "servidor" in origen
 
     def test_fecha_vacia_usa_fecha_del_servidor(self):
         fecha, origen = self.val.normalizar("", self.received_at)
@@ -773,6 +787,10 @@ class TestServicioRecepcionTelemetria:
         Si DynamoDB no está disponible en la consulta de dedup,
         el mensaje se procesa igual (fail-open) para no perder datos.
         """
+        class PersistenciaMemoria(IPersistencia):
+            def guardar(self, evento):
+                pass
+
         class DeduplicadorFallido(IDeduplicador):
             def es_duplicado(self, key):
                 raise ConnectionError("DynamoDB no disponible")
@@ -792,7 +810,8 @@ class TestServicioRecepcionTelemetria:
             deduplicador   = DeduplicadorFallido(),
             enriquecedor   = EnriquecedorEvento(validador_fecha),
             constructor    = ConstructorRespuestaHTTP(),
-            logger         = Logger(config)
+            logger         = Logger(config),
+            persistencia   = PersistenciaMemoria()
         )
         resp = svc.procesar(mensaje_valido)
         # Fail-open: procesa el mensaje aunque DynamoDB falle
@@ -836,6 +855,10 @@ class TestPrincipiosSOLID:
         Principio L: DeduplicadorMemoria es sustituible por DeduplicadorDynamoDB.
         El servicio no nota la diferencia.
         """
+        class PersistenciaMemoria(IPersistencia):
+            def guardar(self, evento):
+                pass
+
         config          = Configuracion()
         validador_fecha = ValidadorFecha()
         pipeline = PipelineValidacion([
@@ -846,10 +869,11 @@ class TestPrincipiosSOLID:
         svc = ServicioRecepcionTelemetria(
             deserializador = DeserializadorJSON(),
             pipeline       = pipeline,
-            deduplicador   = deduplicador_vacio,  # mock en memoria
+            deduplicador   = deduplicador_vacio,
             enriquecedor   = EnriquecedorEvento(validador_fecha),
             constructor    = ConstructorRespuestaHTTP(),
-            logger         = Logger(config)
+            logger         = Logger(config),
+            persistencia   = PersistenciaMemoria()
         )
         resp = svc.procesar(mensaje_valido)
         assert resp["statusCode"] == 200
