@@ -26,8 +26,9 @@ jobs:
 
       - name: Ejecutar pruebas
         run: |
+          cp backend/lambda/lambda_solid_v2.py backend/lambda/lambda_solid.py
           cd backend
-          python3 -m pytest tests/test_lambda_solid.py -v
+          PYTHONPATH=lambda python3 -m pytest tests/test_lambda_solid.py -v
 
       - name: Configurar credenciales AWS
         uses: aws-actions/configure-aws-credentials@v2
