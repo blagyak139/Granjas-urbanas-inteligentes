@@ -409,3 +409,4 @@ def _get_servicio():
 def lambda_handler(event, context):
     return _get_servicio().procesar(event)
 # actualizado 
+# v2 
